@@ -19,7 +19,7 @@
 
 - **GPIO(General Purpose Input/Output)**: MCU 핀을 입력/출력/아날로그/대체 기능으로 설정하여 외부 회로와 신호를 교환한다.
 - **Cortex-M4 CPU**: 프로그램을 실행하고 GPIO 레지스터를 읽고 쓴다.
-- **AHB1 버스**: STM32F411에서 GPIO 주변장치로 접근하는 버스. **STM32F103의 GPIO/APB2 설명과 혼동하지 않도록 주의**한다.
+- **AHB1 버스**: STM32F411에서 GPIO 주변장치로 접근하는 버스. **이번 실습은 STM32F411의 GPIOA와 AHB1 연결만 다룬다**.
 - **RCC 클록 활성화**: GPIOA를 사용하기 전 GPIOA 주변장치 클록을 켠다(STM32CubeMX와 `MX_GPIO_Init()`에서 설정 가능).
 - **SFR(Special Function Register)**: GPIO 설정/상태를 제어하는 메모리 맵 레지스터. 일반 변수와 달리 쓰기 동작이 하드웨어에 영향을 준다.
 
@@ -158,7 +158,7 @@ while (1)
 
 > **아직 확인되지 않은 사항**: 프로브의 실제 대역 등급, 당시 X1/X10 스위치 위치, 오실로스코프 CH2 프로브 배율, 프로브 보상 여부. 따라서 사진만으로 측정 전압이 정확했다고 단정하지 않는다.
 
-## 9. 결론 및 추가 확인 항목
+## 9. 실습 결과 및 배운 점
 
 **이번 실습에서 정리한 내용**
 
@@ -187,3 +187,293 @@ while (1)
 ---
 
 **기록 원칙:** 실제 실습 사진에서 확인한 내용, 교수 자료/데이터시트의 설명, 아직 검증하지 못한 추정을 분리하여 작성했다.
+
+
+---
+
+---
+
+## 교수님 자료 — STM32F411 전용 접기식 학습 자료
+
+> [출처: gotree94 / STM32 / NUCLEO_F411RE / GPIO_DOC](https://github.com/gotree94/STM32/tree/main/NUCLEO_F411RE/GPIO_DOC). 다음 5개 항목은 교수님이 제공한 자료의 **F411 설명과 그림만** 학습 목적에 맞게 재구성하였다. 아래 그림은 교수님 자료에서 가져왔으며, 오늘 내가 직접 수행한 실험·측정 사진과 혼동하지 않는다.
+
+**목차:** [Architecture](#11-architecture-시스템-아키텍처) · [CLOCK](#12-clock-클록) · [Memory Map](#13-memory-map-메모리-맵) · [GPIO](#14-gpio-입출력-및-레지스터) · [Test](#15-test-gpio-fw-디버깅)
+
+## 11. Architecture (시스템 아키텍처)
+
+<details>
+<summary><strong>F411 — 눌러서 펼치기</strong></summary>
+
+STM32F411은 **Arm Cortex-M4** 코어를 사용한다. CPU에서 실행한 명령이 GPIO를 움직이려면 버스를 거쳐 **주변장치 레지스터(SFR)**에 접근해야 한다.
+
+- **CPU**: 명령어 실행.
+- **Flash**: 프로그램 코드 저장.
+- **SRAM**: 실행 중 변수와 스택 저장.
+- **AHB 버스 매트릭스**: CPU, DMA, 메모리, GPIO 등 장치를 연결하고 접근을 조정.
+- **AHB1**: STM32F411의 GPIO를 연결하는 버스 영역.
+
+**LED 제어의 흐름:** `C 코드 → Cortex-M4 → AHB1 → GPIO 레지스터 → 핀 전압 → LD2 LED`
+
+교수님 그림은 시스템 전체 구조를 보여 주며, 실제 LED 회로는 위 4절에서 따로 확인할 수 있다.
+
+**그림 1. STM32F411 버스 매트릭스의 주요 연결**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/arm-arch-2.png" alt="그림 1. STM32F411 버스 매트릭스의 주요 연결 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 2. STM32F411 내부 버스와 주변장치 구조**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/arm-arch-1.png" alt="그림 2. STM32F411 내부 버스와 주변장치 구조 (교수님 STM32F411 수업 자료)" width="760">
+
+</details>
+
+## 12. CLOCK (클록)
+
+<details>
+<summary><strong>F411 — 눌러서 펼치기</strong></summary>
+
+클록은 MCU 내부 회로가 순서대로 동작할 수 있도록 하는 **시간 기준 신호**이다. STM32F411은 RCC(Reset and Clock Control)를 통해 클록 소스를 선택하고 주변장치 클록을 켜거나 끈다.
+
+1. `HAL_Init()` — HAL 사용에 필요한 기본 초기화.
+2. `SystemClock_Config()` — 시스템 클록 구성.
+3. `MX_GPIO_Init()` — GPIOA 주변장치 클록을 활성화하고 핀을 초기화.
+4. `HAL_GPIO_TogglePin()` — 출력 상태 반전.
+5. `HAL_Delay(1000)` — HAL 시간 기준 약 1초 지연.
+
+`RCC_AHB1ENR`의 GPIOA 클록 활성화 비트를 설정해야 GPIOA 레지스터를 정상적으로 사용할 수 있다. **MCU 최대 100 MHz**는 데이터시트상 상한이며 이번 실습의 실측 클록 속도라는 뜻은 아니다.
+
+**그림 3. STM32F411 클록 트리 1**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/411-clk1.png" alt="그림 3. STM32F411 클록 트리 1 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 4. STM32F411 클록 트리 2**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/411-clk2.png" alt="그림 4. STM32F411 클록 트리 2 (교수님 STM32F411 수업 자료)" width="760">
+
+</details>
+
+## 13. Memory Map (메모리 맵)
+
+<details>
+<summary><strong>F411 — 눌러서 펼치기</strong></summary>
+
+STM32F411은 **메모리 매핑 입출력(Memory-Mapped I/O)**을 사용한다. CPU는 일반 메모리를 읽고 쓰듯이 정해진 주변장치 주소에 접근해 GPIO를 제어할 수 있다.
+
+| 구역 | 대표 주소 | 역할 |
+|---|---|---|
+| Flash | `0x08000000` | 사용자 프로그램 코드 |
+| SRAM | `0x20000000` | 실행 중 데이터 |
+| GPIOA | `0x40020000` | GPIOA 설정·입출력 레지스터 |
+
+**GPIOA 주소 예시**: `MODER=0x40020000`, `ODR=0x40020014`, `BSRR=0x40020018`. 따라서 디버거 **Memory 창**에 `0x40020000`을 넣으면 GPIOA 영역을 볼 수 있다.
+
+**주의:** 프로그램 코드가 저장되는 Flash 주소와 GPIO 레지스터 주소는 서로 다르다.
+
+**그림 5. STM32F411 메모리 맵 개요**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/007-1.png" alt="그림 5. STM32F411 메모리 맵 개요 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 6. STM32F411 주변장치 주소 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/009-1.png" alt="그림 6. STM32F411 주변장치 주소 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 7. AHB 관련 레지스터 경계 주소**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/010-1.png" alt="그림 7. AHB 관련 레지스터 경계 주소 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 8. GPIO 및 주변장치 주소 참고 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/011-1.png" alt="그림 8. GPIO 및 주변장치 주소 참고 표 (교수님 STM32F411 수업 자료)" width="760">
+
+</details>
+
+## 14. GPIO (입출력 및 레지스터)
+
+<details>
+<summary><strong>F411 — 눌러서 펼치기</strong></summary>
+
+**GPIO**는 외부 신호를 입력받거나 출력하는 핀이다. 각 포트는 MODER(모드), OTYPER(출력 방식), OSPEEDR(출력 속도), PUPDR(풀업/풀다운), IDR(입력), ODR(출력), BSRR(설정/리셋), AFR(대체 기능) 등의 레지스터로 제어한다.
+
+**MODER는 핀당 2비트를 사용**한다.
+
+| 설정 | 의미 | 예시 |
+|---|---|---|
+| `00` | 입력 | 스위치 입력 |
+| `01` | 출력 | LED 제어 |
+| `10` | 대체 기능 | UART, SPI 연결 |
+| `11` | 아날로그 | ADC 입력 |
+
+**IDR과 ODR의 차이**: `IDR`은 핀의 현재 논리 상태를 읽고, `ODR`은 출력 데이터 레지스터의 값을 읽는다.
+
+**푸시풀/오픈드레인**: 푸시풀은 High와 Low를 능동적으로 구동한다. 오픈드레인은 Low 또는 Hi-Z 상태로 동작하므로 외부 풀업 등이 필요할 수 있다.
+
+**BSRR**은 특정 비트만 설정/초기화할 때 사용한다. 하위 16비트에 `1`을 쓰면 Set, 상위 16비트에 `1`을 쓰면 Reset이다.
+
+```c
+/* 원리 설명용 예시: PA5가 출력으로 설정되어 있을 때 */
+GPIOA->BSRR = (1U << 5);         // PA5 High
+GPIOA->BSRR = (1U << (5 + 16));  // PA5 Low
+```
+
+이 코드는 이번 실습에서 직접 실행한 코드가 아니라, **레지스터 원리를 이해하기 위한 예시**이다. 실제 실습 코드는 위 6절의 `HAL_GPIO_TogglePin()`이다.
+
+**그림 9. GPIO 한 핀의 기본 회로 구조**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F16.png" alt="그림 9. GPIO 한 핀의 기본 회로 구조 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 10. 입력 핀 구성**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F18.png" alt="그림 10. 입력 핀 구성 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 11. 출력 핀 구성**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F19.png" alt="그림 11. 출력 핀 구성 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 12. 대체 기능 구성**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F20.png" alt="그림 12. 대체 기능 구성 (교수님 STM32F411 수업 자료)" width="760">
+
+**그림 13. 아날로그 모드 구성**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F21.png" alt="그림 13. 아날로그 모드 구성 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 841.png: MODER 레지스터 비트 배치**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/841.png" alt="수업 자료 841.png: MODER 레지스터 비트 배치 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 842.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/842.png" alt="수업 자료 842.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 843.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/843.png" alt="수업 자료 843.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 844.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/844.png" alt="수업 자료 844.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 845.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/845.png" alt="수업 자료 845.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 846.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/846.png" alt="수업 자료 846.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 847.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/847.png" alt="수업 자료 847.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 848.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/848.png" alt="수업 자료 848.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 849.png: GPIO 레지스터 관련 표**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/849.png" alt="수업 자료 849.png: GPIO 레지스터 관련 표 (교수님 STM32F411 수업 자료)" width="760">
+
+**수업 자료 8410.png: AFR 레지스터 비트 배치**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/8410.png" alt="수업 자료 8410.png: AFR 레지스터 비트 배치 (교수님 STM32F411 수업 자료)" width="760">
+
+**내 화면과 대조할 때 주의:** 촬영된 `MODER=0xA80010A0`은 PA5=입력(00), PA6=출력(01)로 해석된다. 일반적인 NUCLEO-F411RE의 LD2가 PA5에 연결되는 점과 차이가 있으므로, `LD2_Pin`과 `MX_GPIO_Init()`을 직접 확인하기 전에는 정상 설정으로 확정하지 않는다.
+
+</details>
+
+## 15. Test (GPIO F/W 디버깅)
+
+<details>
+<summary><strong>F411 — 눌러서 펼치기</strong></summary>
+
+교수님 F411 자료의 디버깅 순서를 정리했다. 아래 사진은 **교수님 자료의 예시 화면**이며, 오늘 본인이 직접 촬영한 실습 사진은 위 3·6·7절에 별도로 있다.
+
+**진행 순서:** `Debug 시작 → Expressions → SFR 확인 → Memory 확인 → 초기화 함수 단계별 실행 → LED 상태 변경 → 레지스터 비교`
+
+| 순서 | 확인 항목 | 배울 점 |
+|---:|---|---|
+| 1 | `LD2_GPIO_Port`를 Expressions에 등록 | 현재 사용 중인 포트 주소를 확인 |
+| 2 | SFR 창에서 GPIO 관련 레지스터 확인 | MODER/ODR/IDR 기능과 값 비교 |
+| 3 | Core Registers 및 Disassembly | CPU의 PC, LR, SP와 기계어 실행 흐름 확인 |
+| 4 | Memory 창에 `0x40020000` 입력 | GPIOA 메모리 매핑 직접 관찰 |
+| 5 | `HAL_Init()` → `SystemClock_Config()` → `MX_GPIO_Init()` | 초기화 과정에서 설정 변경 확인 |
+| 6 | `HAL_GPIO_WritePin()`과 `HAL_Delay(1000)` | 교수님 예제의 LED 켜기/끄기 실행 |
+
+**구분할 점:** 교수님 캡처는 `HAL_GPIO_WritePin(..., 1/0)`로 출력을 각각 설정한다. **오늘 실습 사진의 코드는 `HAL_GPIO_TogglePin()`**으로 현재 상태를 반전한다. 함수가 다르므로 같은 코드를 사용했다고 기록하지 않는다.
+
+**코어 레지스터 vs GPIO 레지스터**: PC/LR/SP는 CPU 실행 흐름용이고, MODER/ODR/BSRR은 GPIO 제어용이다. `HAL_GPIO_WritePin()`의 내부 구현에서는 **BSRR**을 사용해 비트를 바꾸는 경로를 볼 수 있다.
+
+**F411 실습 화면 01. Expressions에 LD2_GPIO_Port 추가**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_001.png" alt="F411 실습 화면 01. Expressions에 LD2_GPIO_Port 추가 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 02. SFR 레지스터 창 관찰**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_002.png" alt="F411 실습 화면 02. SFR 레지스터 창 관찰 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 03. CPU 코어 레지스터 관찰**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_003.png" alt="F411 실습 화면 03. CPU 코어 레지스터 관찰 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 04. Disassembly 메뉴 열기**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_013.png" alt="F411 실습 화면 04. Disassembly 메뉴 열기 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 05. Disassembly 화면**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_014.png" alt="F411 실습 화면 05. Disassembly 화면 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 06. CPU 코어의 주요 구성요소**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_MCU_Core.png" alt="F411 실습 화면 06. CPU 코어의 주요 구성요소 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 07. Memory 창에서 GPIOA 시작 주소 확인**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_004.png" alt="F411 실습 화면 07. Memory 창에서 GPIOA 시작 주소 확인 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 08. HAL_Init 실행**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_005.png" alt="F411 실습 화면 08. HAL_Init 실행 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 09. SystemClock_Config 실행**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_006.png" alt="F411 실습 화면 09. SystemClock_Config 실행 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 10. MX_GPIO_Init 실행**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_007.png" alt="F411 실습 화면 10. MX_GPIO_Init 실행 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 11. USART2 초기화 예제(해당 기능을 쓰는 프로젝트에서만)**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_008.png" alt="F411 실습 화면 11. USART2 초기화 예제(해당 기능을 쓰는 프로젝트에서만) (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 12. GPIO 핀 High 설정 예제**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_009.png" alt="F411 실습 화면 12. GPIO 핀 High 설정 예제 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 13. HAL_Delay(1000) 실행**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_010.png" alt="F411 실습 화면 13. HAL_Delay(1000) 실행 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 14. GPIO 핀 Low 설정 예제**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_011.png" alt="F411 실습 화면 14. GPIO 핀 Low 설정 예제 (교수님 STM32F411 수업 자료)" width="760">
+
+**F411 실습 화면 15. HAL_Delay(1000) 후 상태 확인**
+
+<img src="https://raw.githubusercontent.com/gotree94/STM32/main/NUCLEO_F411RE/GPIO_DOC/img/F411_R_012.png" alt="F411 실습 화면 15. HAL_Delay(1000) 후 상태 확인 (교수님 STM32F411 수업 자료)" width="760">
+
+### 내 실습에 연결한 결과
+
+- [x] `HAL_GPIO_TogglePin()`과 `HAL_Delay(1000)` 코드 사진 확보
+- [x] GPIOA 디버거 화면 확보
+- [x] 상승·하강 에지 사진 확보
+- [ ] `LD2_Pin` 정의와 MODER 값 일치 여부 확인
+- [ ] 실제 주기와 출력 전압의 계측값 기록
+
+이미지에서 확인할 수 없는 결과는 임의로 만들어 넣지 않았다.
+
+</details>
+
+---
+
+**실습 범위:** STM32F411 전용. 교수님 예제 화면과 본인의 실습 결과는 명확히 구분하였다.
