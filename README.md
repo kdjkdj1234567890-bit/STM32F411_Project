@@ -1,452 +1,189 @@
+# STM32F411 GPIO 실습 — LD2 LED 제어 및 레지스터 관찰
 
-# STM32F411_Project
-STM32F411_Project TEST
+> 실습일: **2026-11-11**  
+> 주제: GPIO 구조, LD2 LED 회로, HAL 기반 LED 토글, GPIOA 레지스터 디버깅, 오실로스코프 에지 측정  
+> 장비: STM32F411 계열 NUCLEO 보드(제공 사진은 NUCLEO-F411RE 계열로 보임), STM32CubeIDE, Tektronix TDS 2012B 오실로스코프
 
-# H1 제목
-## H2 제목
-### H3 제목
-#### H4 제목
-##### H5 제목
-###### H6 제목
+## 1. 실습 목표
 
----
+1. MCU의 GPIO가 어떻게 외부 LED를 제어하는지 이해한다.
+2. 메모리 매핑 GPIO 레지스터(MODER, IDR, ODR, BSRR 등)의 역할과 주소를 확인한다.
+3. `HAL_GPIO_TogglePin()`과 `HAL_Delay(1000)`을 사용해 LED 출력을 전환한다.
+4. 디버거의 Expressions에서 GPIOA 레지스터를 확인하고, 오실로스코프로 상승·하강 에지를 관찰한다.
+5. 실제 LED 부품의 회로도, PCB 패턴, 데이터시트를 연결해 읽는다.
 
-## 텍스트 스타일링
+> **수업 과제**: 2026-11-11 Google Classroom 공지 **「GPIO F/W 깃허브 정리」**에 맞춰 작성한 학습 기록이다.  
+> **자료 구분**: [교수님 GPIO 학습 자료](https://github.com/gotree94/STM32/tree/main/NUCLEO_F411RE/GPIO_DOC)와 제공된 PDF/회로 자료를 참고하고, 오늘 촬영한 코드·디버거·파형 사진을 실습 증거로 구분했다. 교수님 원문 압축파일이나 PDF 전문을 재게시하지 않았다.
 
-*이탤릭체* 또는 _이탤릭체_
+## 2. GPIO와 시스템 아키텍처 요약
 
-**볼드체** 또는 __볼드체__
+- **GPIO(General Purpose Input/Output)**: MCU 핀을 입력/출력/아날로그/대체 기능으로 설정하여 외부 회로와 신호를 교환한다.
+- **Cortex-M4 CPU**: 프로그램을 실행하고 GPIO 레지스터를 읽고 쓴다.
+- **AHB1 버스**: STM32F411에서 GPIO 주변장치로 접근하는 버스. **STM32F103의 GPIO/APB2 설명과 혼동하지 않도록 주의**한다.
+- **RCC 클록 활성화**: GPIOA를 사용하기 전 GPIOA 주변장치 클록을 켠다(STM32CubeMX와 `MX_GPIO_Init()`에서 설정 가능).
+- **SFR(Special Function Register)**: GPIO 설정/상태를 제어하는 메모리 맵 레지스터. 일반 변수와 달리 쓰기 동작이 하드웨어에 영향을 준다.
 
-***볼드 이탤릭*** 또는 ___볼드 이탤릭___
+## 3. GPIOA 레지스터와 주소
 
-~~취소선~~
+GPIOA 기준 주소(Base address)는 **`0x40020000`**이다.
 
-`인라인 코드`
+| 레지스터 | 오프셋 | 주소 | 기능 |
+|---|---:|---|---|
+| `MODER` | `0x00` | `0x40020000` | 핀 모드: 입력(00), 출력(01), 대체기능(10), 아날로그(11) |
+| `OTYPER` | `0x04` | `0x40020004` | Push-pull(0) / Open-drain(1) |
+| `OSPEEDR` | `0x08` | `0x40020008` | GPIO 출력 속도 |
+| `PUPDR` | `0x0C` | `0x4002000C` | 풀업 / 풀다운 설정 |
+| `IDR` | `0x10` | `0x40020010` | 입력 핀의 실제 논리 상태 읽기 |
+| `ODR` | `0x14` | `0x40020014` | 출력 데이터의 현재 상태 |
+| `BSRR` | `0x18` | `0x40020018` | 비트 설정(Set)·리셋(Reset), 원자적 쓰기 지원 |
+| `AFRL` | `0x20` | `0x40020020` | PA0~PA7 대체 기능 선택 |
+| `AFRH` | `0x24` | `0x40020024` | PA8~PA15 대체 기능 선택 |
 
----
+`MODER`에서 핀 하나는 2비트를 사용한다. 예를 들어 PA5 모드는 `MODER[11:10]`이다.
 
-## 목록 (Lists)
+![GPIO 설정 관련 수업 필기](images/05_gpio_register_whiteboard.png)
 
-### 순서 없는 목록
+### 디버거 실제 화면
 
-- 항목 1
-- 항목 2
-  - 하위 항목 1
-  - 하위 항목 2
-    - 더 깊은 하위 항목
+![GPIOA 레지스터 디버깅](images/02_gpioa_register_debug.jpg)
 
-* 별표로도 가능
-+ 플러스로도 가능
+사진에서 읽히는 값:
 
-### 순서 있는 목록
+- `GPIOA` 베이스 주소: `0x40020000`
+- `MODER`: `0xA80010A0`
+- `ODR`: `0x00000000`(사진이 찍힌 시점의 값)
+- 나머지 레지스터의 값은 디버깅 시점마다 달라질 수 있다.
 
-1. 첫 번째 항목
-2. 두 번째 항목
-   1. 하위 항목 1
-   2. 하위 항목 2
-3. 세 번째 항목
+**확인 필요 — 중요한 불일치:** 촬영한 `MODER = 0xA80010A0`을 비트로 해석하면 **PA5의 모드 비트 [11:10]는 `00`(입력)**, **PA6의 [13:12]는 `01`(출력)**이다. 반면 일반적인 NUCLEO-F411RE의 사용자 LED(LD2)는 **PA5**에 연결된다. 따라서 해당 화면이 실제 LED 토글 중인 설정인지, 프로젝트의 `LD2_Pin`이 무엇인지, 사용하는 보드/보드 리비전이 맞는지 **`main.h`와 `MX_GPIO_Init()`을 대조해야 한다**. 이 불일치를 해결하기 전에는 'PA5 출력 설정이 레지스터로 검증되었다'고 주장하지 않는다.
 
-### 체크리스트
+## 4. LD2 LED 회로와 PCB
 
-- [x] 완료된 작업
-- [ ] 미완료 작업
-- [x] 또 다른 완료 작업
+### 보드 사진
 
----
+![보드의 LD2와 R31](images/06_nucleo_ld2_photo.png)
 
-## 링크 (Links)
+### 제공된 LD2 회로도
 
-[네이버](https://naver.com)
+![LD2 회로도](images/07_ld2_schematic.png)
 
-[GitHub](https://github.com)
+회로도 발췌를 보면 LD2의 **캐소드(-)** 쪽은 GND에 연결되고, **애노드(+)** 쪽은 직렬 저항 `R31`과 솔더 브리지 `SB21` 방향으로 연결된다. 자료의 표기값은 **R31 = 510Ω**이다. 해당 연결이 PA5로 이어지는지는 **전체 보드 회로도**에서 최종 확인한다.
 
-[링크 텍스트](https://example.com "툴팁 텍스트")
+### PCB 배치 화면
 
-<https://example.com>
+![LD2와 R31 PCB 배치](images/08_ld2_pcb_layout.png)
 
-[참조 링크][1]
+PCB 화면에서 `LD2`, `R31`, `U4`, `C21`의 물리적 위치를 구분할 수 있다. PCB 패턴 그림만으로 전체 연결 경로를 확정하지 않고 회로도 및 넷 이름과 함께 본다.
 
-[1]: https://example.com "참조 링크"
+> **부품 표기 재확인**: 보드 확대 사진의 R31 부품 표기가 '151'처럼 보이는 반면, 제공된 회로도에는 `510`이라고 쓰여 있다. 사진 해상도·보드 리비전·부품값 중 어느 차이인지 확인이 필요하다. 이 자료만으로 실제 저항값을 단정하지 않는다.
 
-### 내부 링크
+## 5. LED 부품 데이터시트 읽기
 
-[목차로 이동](#stm32f411_project)
+함께 제공된 Everlight LED 데이터시트 **`19-213SYGC/S530-XX/TR8`**의 주요 조건은 다음과 같다.
 
----
+| 항목 | 데이터시트 값 | 비고 |
+|---|---|---|
+| 발광색 | Super Yellow Green | 해당 부품 모델 기준 |
+| 순방향 전압 `VF` | Typ. 2.0 V, Max. 2.4 V | `IF = 20 mA`, `Ta = 25°C` |
+| 허용 순방향 전류 `IF` | 최대 25 mA | 절대최대정격 |
+| 피크 파장 | Typ. 575 nm | `IF = 20 mA` |
+| 지향각 | Typ. 120° | 데이터시트 조건 |
 
-## 코드 (Code)
+LED는 전류 제한 저항이 필요하다. 다만 **이 데이터시트 모델이 실제 납땜된 LD2와 정확히 동일한지는 부품 BOM/보드 리비전 확인이 필요**하다. 데이터시트의 20mA 조건값을 실제 회로 전류의 측정값처럼 쓰지 않는다.
 
-### 인라인 코드
+## 6. 오늘 작성한 LED 토글 코드
 
-`console.log('Hello World')`
+STM32CubeIDE에서 확인한 핵심 코드(주석과 무관한 부분을 간추림):
 
-### JavaScript
+```c
+/* MX_GPIO_Init(); 등 주변장치 초기화 후 */
+int counter = 0;
 
-```javascript id="k3nu7p"
-function hello() {
-    console.log('Hello World');
+while (1)
+{
+    counter++;
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+    HAL_Delay(1000);  // 1000 ms = 약 1초 대기
 }
 ```
 
-### Python
+![STM32CubeIDE 코드 화면](images/01_led_toggle_code.jpg)
 
-```python id="f4r9va"
-def hello():
-    print("Hello World")
-```
+- `HAL_GPIO_TogglePin(...)`: 현재 핀 출력 상태를 반전한다(High ↔ Low).
+- `HAL_Delay(1000)`: 다음 반전까지 약 1초 대기한다. 실제 지연은 클록 설정과 실행 상태의 영향을 받을 수 있다.
+- **예상 동작**: High 1초 + Low 1초 → **전체 점멸 주기 약 2초**, **반전 간격 약 1초**.
+- `counter++`: 반복 횟수를 세는 변수. 단순 선언·증가만으로는 LED 동작에 필요하지 않다.
+- `HAL_GPIO_WritePin()`으로 1초 켜고 1초 끄는 예제(교수님 자료)와는 달리, **오늘 촬영된 코드는 `TogglePin()` 방식**이다. 결과는 유사하지만 코드 방식은 구분한다.
 
-### Bash
+## 7. 오실로스코프 측정
 
-```bash id="np0m6a"
-npm install package-name
-```
+사용 장비: Tektronix **TDS 2012B** / 채널 `CH2`.
 
-### 들여쓰기 코드 블록
+### 상승 에지(Low → High)
 
-    // 4개의 공백으로 들여쓰기
-    console.log('Hello');
+![상승 에지](images/03_oscilloscope_rising.jpg)
 
----
+### 하강 에지(High → Low)
 
-## 표 (Tables)
+![하강 에지](images/04_oscilloscope_falling.jpg)
 
-| 열1 | 열2 | 열3 |
-|-----|-----|-----|
-| 데이터1 | 데이터2 | 데이터3 |
-| 데이터4 | 데이터5 | 데이터6 |
+**관찰된 사실**
 
-### 표 정렬
+- 두 사진에 각각 Low → High, High → Low 신호 전환이 보인다.
+- 화면 하단에 `CH2 1.00V`(수직 스케일 약 1 V/div)와 `M 10.0ms`(수평 스케일 10 ms/div)가 표시된다.
+- 두 에지가 있다는 것은 출력이 전환되었음을 보여 주지만, **사진 한 장의 시간 범위(약 100 ms)만으로 1초 간격·2초 주기를 직접 입증할 수는 없다**.
+- 정확한 진폭·주기는 프로브 감쇠 설정과 오실로스코프 커서/자동 측정값을 추가로 확인해야 한다.
 
-| 왼쪽 정렬 | 중앙 정렬 | 오른쪽 정렬 |
-|:----------|:---------:|-----------:|
-| 데이터1 | 데이터2 | 데이터3 |
-| 데이터4 | 데이터5 | 데이터6 |
+**재측정 제안**: 수평 스케일을 **200~500 ms/div**로 조정하여 연속 파형 여러 에지를 한 화면에 나타내고 `Period`, `Frequency`, `Vmax`, `Vmin`을 확인한다.
 
----
+## 8. 오실로스코프 프로브 사양과 측정 시 주의점
 
-## 인용문 (Blockquotes)
+수업에서 제공된 **프로브 사양표 사진**으로 X1/X10 설정을 비교했다. 이 표는 20·40·60·100MHz 등급의 프로브 사양을 함께 제시한 자료이며, 오늘 실제 연결한 프로브가 어느 등급인지 사진만으로 확정할 수 없다.
 
-> 이것은 인용문입니다.
+![수업에서 제공된 오실로스코프 프로브 사양표](images/09_oscilloscope_probe_specifications.jpg)
 
-> 여러 줄의 인용문도 가능합니다.
->
-> 두 번째 줄입니다.
->
-> > 중첩된 인용문
+| 항목 | X1 | X10 |
+|---|---|---|
+| 감쇠비 | 1:1 | 10:1 |
+| 입력 저항 | 1MΩ ±2% | 10MΩ ±2% |
+| 입력 정전용량 | 85~115pF | 18.5~22.5pF(20·40MHz 등급), 14.5~17.5pF(60·100MHz 등급) |
+| 사양표상 시스템 대역폭 | DC~6MHz | 등급별 DC~20/40/60/100MHz |
 
----
+**측정 절차에서 배운 점**
 
-## 구분선 (Horizontal Rules)
+1. **프로브 스위치가 X1인지 X10인지 먼저 확인한다.** 프로브의 물리적 감쇠비와 오실로스코프의 CH2 `Probe` 설정을 일치시켜야 전압을 올바르게 읽을 수 있다.
+2. **X10이 신호에 주는 부하가 일반적으로 더 적다.** 특히 빠른 상승·하강 에지를 측정할 때 유리하지만, 신호 크기와 오실로스코프 노이즈 수준도 함께 고려한다.
+3. **측정 전 프로브 보상(compensation)을 점검한다.** 기준 사각파에 연결해 에지가 과보상·미보상되지 않는지 확인한다. 이번 실습에서 보상을 실제 수행했는지는 기록이 없다.
+4. 사양표는 오실로스코프 **입력 임피던스 1MΩ** 및 장비의 **예열 20분 이상** 조건을 명시한다.
+5. 앞서 촬영한 CH2 파형의 `1.00V/div` 표시만으로 실제 프로브 X1/X10 설정, 진폭 및 주기를 확정할 수 없다.
 
----
+> **아직 확인되지 않은 사항**: 프로브의 실제 대역 등급, 당시 X1/X10 스위치 위치, 오실로스코프 CH2 프로브 배율, 프로브 보상 여부. 따라서 사진만으로 측정 전압이 정확했다고 단정하지 않는다.
 
-***
+## 9. 결론 및 추가 확인 항목
 
-___
+**이번 실습에서 정리한 내용**
 
----
+1. MCU는 GPIO 관련 SFR을 통해 출력 핀의 상태를 제어한다.
+2. LED는 극성·직렬 저항·PCB 연결을 함께 확인해야 한다.
+3. `TogglePin()`을 1초 지연과 함께 반복하면 코드상 2초 주기의 LED 점멸이 예상된다.
+4. 디버거에서 GPIOA의 베이스 주소와 레지스터 값을 읽었으며 오실로스코프에서 양방향 에지를 관찰했다.
 
-## HTML 태그
+**후속 검증**
 
-<details>
-<summary>클릭하면 펼쳐집니다</summary>
+- [ ] `main.h`에서 `LD2_Pin`과 `LD2_GPIO_Port`의 실제 정의 확인
+- [ ] `MX_GPIO_Init()`에서 PA5/PA6 중 어느 핀이 출력으로 설정됐는지 확인
+- [ ] GPIOA `MODER` 스냅샷과 실제 동작 핀의 대응 확인
+- [ ] R31 부품 마킹과 회로도 표기값 및 보드 리비전 확인
+- [ ] 오실로스코프 CH2 설정과 실제 프로브 감쇠비(X1/X10) 일치 확인
+- [ ] 오실로스코프로 실제 주기·진폭 수치 측정
 
-숨겨진 내용입니다.
+## 10. 참고 자료
 
-</details>
-
-### 키보드 표시
-
-<kbd>Ctrl</kbd> + <kbd>C</kbd>
-
-### 하이라이트 태그
-
-<mark>하이라이트된 텍스트</mark>
-
-### 아래첨자와 위첨자
-
-H<sub>2</sub>O
-
-X<sup>2</sup>
+- [교수님 GPIO 학습 자료 — gotree94/STM32](https://github.com/gotree94/STM32/tree/main/NUCLEO_F411RE/GPIO_DOC)
+- [STMicroelectronics STM32F411xC/xE 데이터시트](https://www.st.com/resource/en/datasheet/stm32f411ce.pdf)
+- [STMicroelectronics RM0383 레퍼런스 매뉴얼](https://www.st.com/resource/en/reference_manual/rm0383-stm32f411xce-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+- Everlight `19-213SYGC/S530-XX/TR8` 데이터시트 — 실습 시 제공된 PDF(본문에 핵심 사양 정리, 원본 파일은 별도)
+- 오실로스코프 프로브 X1/X10 사양표 — 수업에서 제공된 사진(위 8절)
 
 ---
 
-## 이스케이프 문자
-
-특수 문자를 그대로 표시하려면
-백슬래시를 사용합니다.
-
-\*별표\*
-
-\#해시태그
-
-\`백틱\`
-
----
-
-## GitHub 확장 문법
-
-### 멘션과 이슈 참조
-
-`@username`
-
-`#123`
-
-커밋 해시 예제: `a1b2c3d`
-
-### 각주 (Footnotes)
-
-여기에 각주가 있습니다.[^1]
-
-[^1]: 이것은 각주입니다.
-
-### 수학 수식 (LaTeX)
-
-인라인 수식:
-
-$E = mc^2$
-
-블록 수식:
-
-$$
-\sum_{i=1}^{n} x_i = x_1 + x_2 + \cdots + x_n
-$$
-
----
-
-## 배지 (Badges)
-
-### 배지 사용 예제
-
-![Markdown](https://img.shields.io/badge/Markdown-Practice-blue)
-
-![GitHub](https://img.shields.io/badge/GitHub-Repository-black)
-
-![STM32](https://img.shields.io/badge/STM32-F411-blue)
-
----
-
-# STM32F411 프로젝트 이미지
-
-## 1. STM32F411 Block Diagram
-
-STM32F411 보드의 전원부,
-ST-LINK 다운로드 회로 및
-메인 MCU의 전체 구성 블록도입니다.
-
-<p align="center">
-  <img src="img/block-diagram.png" width="80%">
-</p>
-
-## 2. STM32F411 PCB 3D Model
-
-PCB의 부품 배치 및 3D 모델입니다.
-
-<p align="center">
-  <img src="img/pcb-3d.png" width="80%">
-</p>
-
-## 3. STM32F411 PCB Layout
-
-PCB 레이아웃 및 배선 구조입니다.
-
-<p align="center">
-  <img src="img/pcb-layout.png" width="80%">
-</p>
-
-## 4. STM32F411 Gerber Viewer
-
-PCB 제작용 Gerber 데이터 및
-레이어 검토 화면입니다.
-
-<p align="center">
-  <img src="img/gerber.png" width="80%">
-</p>
-
-## 5. STM32F411 Mechanical Dimensions
-
-STM32 Nucleo 보드의 기구 치수
-및 주요 부품 위치 참고자료입니다.
-
-<p align="center">
-  <img src="img/mechanical.png" width="80%">
-</p>
-
----
-
-# 이미지 삽입 및 크기 조절 실습
-
-## 1. 기본 이미지 삽입
-
-![STM32F411 PCB](img/pcb-3d.png)
-
-## 2. 이미지 제목 추가
-
-![STM32F411 PCB](img/pcb-3d.png "PCB 3D Model")
-
-## 3. 이미지에 링크 추가
-
-[![STM32F411](img/pcb-3d.png)](https://www.st.com/)
-
-## 4. 이미지 참조 방식
-
-![PCB Layout][image1]
-
-[image1]: img/pcb-layout.png "PCB Layout"
-
----
-
-# HTML 이미지 크기 조절
-
-## 1. 원본 이미지 크기
-
-<p align="center">
-  <img src="img/pcb-3d.png">
-</p>
-
-## 2. 너비 80%
-
-<p align="center">
-  <img src="img/pcb-3d.png" width="80%">
-</p>
-
-## 3. 너비 200px
-
-<p align="center">
-  <img src="img/pcb-3d.png" width="200">
-</p>
-
-## 4. 높이 200px
-
-<p align="center">
-  <img src="img/pcb-3d.png" height="200">
-</p>
-
-## 5. 너비 500px
-
-<p align="center">
-  <img src="img/pcb-3d.png" width="500">
-</p>
-
-## 6. 너비와 높이 지정
-
-<p align="center">
-  <img src="img/pcb-3d.png" width="400" height="250">
-</p>
-
-참고: width와 height를 모두 지정하면
-원본 이미지의 가로세로 비율이 달라질 수 있습니다.
-
-height="20%" 형태는 HTML 이미지 속성에서
-유효한 높이 지정 방식이 아닙니다.
-GitHub에서는 height="200"처럼
-픽셀 단위로 지정하는 것을 권장합니다.
-
----
-
-# 이미지 파일 경로
-
-## 1. 일반적인 이미지 경로
-
-```markdown id="8zpt6q"
-![PCB 이미지](img/pcb-3d.png)
-```
-
-## 2. 폴더명에 공백이 있는 경우
-
-공백 문자는 URL에서 %20으로 표현할 수 있습니다.
-
-원래 경로:
-
-`my folder/image.png`
-
-마크다운 적용:
-
-```markdown id="n40lo3"
-![alt text](my%20folder/image.png)
-```
-
-## 3. 이미지 파일명에 공백이 있는 경우
-
-원래 파일명:
-
-`PCB 3D Model.png`
-
-마크다운 적용:
-
-```markdown id="xx2pyi"
-![PCB 3D](img/PCB%203D%20Model.png)
-```
-
-## 4. 이미지 파일명 주의사항
-
-- 파일명에서 대문자와 소문자를 구분합니다.
-- PNG와 png도 서로 다르게 취급될 수 있습니다.
-- 폴더 경로를 정확히 입력해야 합니다.
-- 파일명에는 공백 대신 하이픈(-) 사용을 권장합니다.
-- 경로에 공백이 있다면 %20으로 표현할 수 있습니다.
-
----
-
-# STM32F411 프로젝트 정보
-
-| 항목 | 내용 |
-|------|------|
-| Project | STM32F411_Project |
-| Main MCU | STM32F411RET6 |
-| Debug MCU | STM32F103CBT6 |
-| Architecture | ARM Cortex-M4 |
-| PCB Design | EasyEDA |
-| Gerber Viewer | GerbView |
-| Version Control | GitHub |
-| Documentation | Markdown |
-
----
-
-# 프로젝트 파일 구조
-
-    STM32F411_Project/
-    |
-    |-- README.md
-    |
-    |-- img/
-        |-- block-diagram.png
-        |-- pcb-3d.png
-        |-- pcb-layout.png
-        |-- gerber.png
-        |-- mechanical.png
-
----
-
-# 프로젝트 진행 상황
-
-- [x] GitHub 저장소 생성
-- [x] Markdown 문법 작성
-- [x] 제목 및 텍스트 스타일 작성
-- [x] 목록 및 체크리스트 작성
-- [x] 링크 작성
-- [x] 코드 블록 작성
-- [x] 표 작성
-- [x] 이미지 파일 업로드
-- [x] 블록도 이미지 추가
-- [x] 이미지 크기 조절 예제 작성
-- [ ] README 이미지 표시 확인
-- [ ] 회로도 파일 추가
-- [ ] 하드웨어 테스트 결과 추가
-
----
-
-# 참고 링크
-
-[GitHub Markdown Guide](https://docs.github.com/en/get-started/writing-on-github)
-
-[STMicroelectronics](https://www.st.com/)
-
-[EasyEDA](https://easyeda.com/)
-
----
-
-# STM32F411_Project
-
-STM32F411 PCB 설계 자료 및
-GitHub Markdown 문법 실습 프로젝트입니다.
+**기록 원칙:** 실제 실습 사진에서 확인한 내용, 교수 자료/데이터시트의 설명, 아직 검증하지 못한 추정을 분리하여 작성했다.
